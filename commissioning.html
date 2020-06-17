@@ -1,0 +1,701 @@
+<!doctype html>
+<!--
+Copyright 2019 Google Inc. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+<!--
+This work is based on the example 'Read Characteristic Value Changed'
+contributed by the Google Chrome Team at
+https://googlechrome.github.io/samples/web-bluetooth/
+It has been modified by the Silicon Labs Apps Team to support an
+application of Wi-Fi commissioning using Web BLE.
+It is made available as an example under the terms of the
+Apache License, Version 2.0
+-->
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="description" content="Sample illustrating the use of Web Bluetooth to perform Wi-Fi commissioning.">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style>
+      .buttons {
+        width: 250px;
+        text-align-last:center;
+      }
+    </style>
+
+    <script>
+    // This work is based on the example 'Read Characteristic Value Changed'
+    // contributed by the Google Chrome Team at
+    // https://googlechrome.github.io/samples/web-bluetooth/
+    // It has been modified by the Silicon Labs Apps Team to support an
+    // application of Wi-Fi commissioning using Web BLE.
+    // It is made available as an example under the terms of the
+    // Apache License, Version 2.0
+
+    // Global Variables
+    var bluetoothDevice;
+    var commissioningStateCharacteristic;
+    var commissioningControlCharacteristic;
+    var accessPointsObj = [];
+
+    <!-- const SVC_WU_UUID             = '01ff0100-ba5e-f4ee-5ca1-eb1e5e4b1ce0'; -->
+    <!-- const CHR_WU_READ_UUID        = '01ff0102-ba5e-f4ee-5ca1-eb1e5e4b1ce0'; -->
+    <!-- const CHR_WU_WRITE_UUID       = '01ff0101-ba5e-f4ee-5ca1-eb1e5e4b1ce0'; -->
+    <!-- const SVC_WU_UUID             = '0000180d-0000-1000-8000-00805f9b34fb'; -->
+    <!-- const CHR_WU_READ_UUID        = '00002a37-0000-1000-8000-00805f9b34fb'; -->
+
+    const SVC_COMMISSIONING_UUID             = '01ff5500-ba5e-f4ee-5ca1-eb1e5e4b1ce0';
+    const SVC_COMMISSIONING_STATUS_UUID      = '01ff5502-ba5e-f4ee-5ca1-eb1e5e4b1ce0';
+    const SVC_COMMISSIONING_CONTROL_UUID     = '01ff5501-ba5e-f4ee-5ca1-eb1e5e4b1ce0';
+
+    // Commissioning error code
+    const COMMISSIONING_Success           = 0;
+    const COMMISSIONING_Error             = 1;
+    const COMMISSIONING_FailedInit        = 2;
+    const COMMISSIONING_FailedScan        = 3;
+    const COMMISSIONING_BusyInScanning    = 4;
+    const COMMISSIONING_BusyInCommissioning = 5;
+    const COMMISSIONING_FailedCommissioning = 6;
+
+    // Commissioning Control code
+    const COMMISSIONING_CONTROL_NONE        = 0;
+    const COMMISSIONING_CONTROL_WIFI_INIT   = 1;
+    const COMMISSIONING_CONTROL_WIFI_SCAN   = 2;
+    const COMMISSIONING_CONTROL_WIFI_SAVE_AP = 3;
+    const COMMISSIONING_CONTROL_WIFI_SET_AP = 4;
+
+    // Commissioning status
+    const COMMISSIONING_None           = 0;
+    const COMMISSIONING_Initializing   = 1;
+    const COMMISSIONING_Initialized    = 2;
+    const COMMISSIONING_Scaning        = 3;
+    const COMMISSIONING_Configuring    = 4;
+    const COMMISSIONING_Commissioning  = 5;
+    const COMMISSIONING_Commissioned   = 6;
+    
+    // Commissioning notify code
+    const CommissioningNotifyNone = 0;
+    const CommissioningNotifyStatus = 1;
+    const CommissioningNotifyWifiInitStart = 0x10;
+    const CommissioningNotifyWifiInitEnd = 0x11;
+    const CommissioningNotifyWifiScanStart = 0x20;
+    const CommissioningNotifyWifiScanEnd = 0x21;
+    const CommissioningNotifyWifiScanning = 0x22;
+    const CommissioningNotifyWifiSaveAPStart = 0x30;
+    const CommissioningNotifyWifiSaveAPEnd = 0x31;
+    const CommissioningNotifyWifiSetAPStart = 0x40;
+    const CommissioningNotifyWifiSetAPEnd = 0x41;
+    
+    // TLV
+    const CommissioningTlvTypeSSID = 1;
+    const CommissioningTlvTypePassword = 2;
+    const CommissioningTlvTypeRssi = 3;
+
+    // This function requests BLE devices nearby
+    // with the device prefix name 'DMP'.
+    async function requestDevice() {
+      log('> Requesting Bluetooth Devices DMP*...');
+      bluetoothDevice = await navigator.bluetooth.requestDevice({
+          filters: [{namePrefix: 'ZBLE'}],
+          optionalServices: [SVC_COMMISSIONING_UUID]
+          });
+      bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+    }
+
+
+    // This function handles the event 'gattserverdisconnected'
+    async function onDisconnected() {
+      log('> Bluetooth Device disconnected');
+      try {
+        await connectDeviceAndCacheCharacteristics()
+      } catch (error) {
+        log('> Error: ' + error);
+      }
+    }
+
+    // This function connects the web browser to the BLE device and
+    // gets the Services and their corresponding Characteristics.
+    async function connectDeviceAndCacheCharacteristics() {
+      if (bluetoothDevice.gatt.connected &&
+          commissioningStateCharacteristic &&
+          commissioningControlCharacteristic) {
+        return;
+      }
+
+      log('> Connecting to GATT Server...');
+      const server = await bluetoothDevice.gatt.connect();
+
+      log('> Getting the commissioning Service...');
+      const commissioningService = await server.getPrimaryService(SVC_COMMISSIONING_UUID);
+
+      log('> Getting the commissioning Characteristics...');
+      commissioningStateCharacteristic = await commissioningService.getCharacteristic(SVC_COMMISSIONING_STATUS_UUID);
+      commissioningStateCharacteristic.addEventListener('characteristicvaluechanged',
+          handleCommissioningStateChanged);
+      commissioningControlCharacteristic = await commissioningService.getCharacteristic(SVC_COMMISSIONING_CONTROL_UUID);
+      log('> Starting State Notifications...');
+      await commissioningStateCharacteristic.startNotifications();
+    }
+
+    async function savedEventHandler() {
+      log('> Saved.');
+
+      // Read the Wi-Fi config state to confirm
+      await commissioningStateCharacteristic.readValue();
+    }
+
+    async function joinedEventHandler() {
+      // Read the Wi-Fi config state to confirm
+      await commissioningStateCharacteristic.readValue();
+    }
+
+    // This function will be called when 'readValue' resolves and the
+    // characteristic value changes since 'characteristicvaluechanged' event
+    // listener has been added.
+    function handleCommissioningStateChanged(event) {
+        try
+        {
+            let notifyCode = event.target.value.getUint8(0);
+            let error = event.target.value.getUint8(1);
+            let length = event.target.value.getUint8(2);
+            log('> Commissioning notifications control code ' + notifyCode + ' with error code ' + error);
+            switch (notifyCode)
+            {
+            case CommissioningNotifyNone:
+            case CommissioningNotifyStatus:
+                let state = event.target.value.getUint8(3);
+                log('> commissioning status ' + state);
+                if (COMMISSIONING_Commissioned == state)
+                {
+                    log('> Wi-Fi commissioning successfully');
+                    onResetButtonClick();
+                }
+                break;
+            case CommissioningNotifyWifiInitStart:
+                let state1 = event.target.value.getUint8(3);
+                if (COMMISSIONING_Initializing == state1)
+                {
+                    log('> Wi-Fi initializing...');
+                }
+                break;
+            case CommissioningNotifyWifiInitEnd:
+                let state2 = event.target.value.getUint8(3);
+                if (COMMISSIONING_Initialized == state2)
+                {
+                    log('> Wi-Fi initialized');
+                    document.querySelector('#btnConnect').disabled = true;
+                    document.querySelector('#btnScan').disabled = false;
+                    document.querySelector('#btnReset').disabled = false;
+                }
+                if (COMMISSIONING_Commissioned == state2)
+                {
+                    log('> Wi-Fi commissioning finished');
+                    <!-- document.querySelector('#btnConnect').disabled = true; -->
+                }
+            break;
+            case CommissioningNotifyWifiScanStart:
+                log('> Wi-Fi Start scanning...');
+                break;
+            case CommissioningNotifyWifiScanning:
+            case CommissioningNotifyWifiScanEnd:
+                log('> Wi-Fi scanner notification, scan list... (length ' + length + ')');
+                var ssidList = document.getElementById("selAccessPoint");
+                for (i = 0; i < length;)
+                {
+                    var option = document.createElement("option");
+                    for (m = 0;m < 2; m++)
+                    {
+                        let type = event.target.value.getUint8(3 + i);
+                        i++;
+                        let len = event.target.value.getUint8(3 + i);
+                        i++;
+
+                        var value = new Uint8Array(len);
+                        for (j = 0;j < len;j++)
+                        {
+                            value[j] = event.target.value.getUint8(3 + i);
+                            i++;
+                        }
+                        if (1 == type)
+                        {
+                            option.text = arrayBufferToString(value);
+                        }
+                        if (3 == type)
+                        {
+                            option.value = value[0];
+                        }
+                    }
+                    log('> scan list, ssid ' + option.text + ' rssi '+ option.value);
+                    ssidList.add(option);
+                }
+                if (CommissioningNotifyWifiScanEnd == notifyCode)
+                {
+                    document.querySelector('#btnConnect').disabled = true;
+                    document.querySelector('#btnScan').disabled = false;
+                    document.querySelector('#btnReset').disabled = false;
+                    document.querySelector('#btnSave').disabled = false;
+                    document.querySelector('#btnJoin').disabled = false;
+                    document.querySelector('#selAccessPoint').disabled = false;
+                    document.querySelector('#txtPassword').disabled = false;
+                    log('> scanning is ended');
+                }
+            break;
+            case CommissioningNotifyWifiSaveAPStart:
+            break;
+            case CommissioningNotifyWifiSaveAPEnd:
+                savedEventHandler();
+                document.querySelector('#btnConnect').disabled = true;
+                document.querySelector('#btnScan').disabled = false;
+                document.querySelector('#btnReset').disabled = false;
+                document.querySelector('#btnSave').disabled = false;
+                document.querySelector('#btnJoin').disabled = false;
+                document.querySelector('#selAccessPoint').disabled = false;
+                document.querySelector('#txtPassword').disabled = false;
+            break;
+            case CommissioningNotifyWifiSetAPStart:
+                log('> Start joining the network ...');
+            break;
+            case CommissioningNotifyWifiSetAPEnd:
+                joinedEventHandler();
+                if (COMMISSIONING_Success == error)
+                {
+                    log('> Joined.');
+                }
+                else
+                {
+                    log('> Joining failure.');
+                }
+                document.querySelector('#btnConnect').disabled = true;
+                document.querySelector('#btnScan').disabled = false;
+                document.querySelector('#btnReset').disabled = false;
+                document.querySelector('#btnSave').disabled = false;
+                document.querySelector('#btnJoin').disabled = false;
+                document.querySelector('#selAccessPoint').disabled = false;
+                document.querySelector('#txtPassword').disabled = false;
+            break;
+            }
+        }
+        catch (e)
+        {
+          log('> Error: ' + e.name + ': ' + e.message);
+          console.log(event)
+        }
+    }
+
+    // This helper function converts an array buffer type to a string.
+    // It is used to convert the data received from the BLE device into
+    // a JSON string representation of the access points list.
+    function arrayBufferToString(buffer){
+      var arr = new Uint8Array(buffer);
+      var str = String.fromCharCode.apply(String, arr);
+      if(/[\u0080-\uffff]/.test(str)){
+          log('> Error: This string seems to contain (still encoded) multibytes');
+      }
+      return str;
+    }
+    
+    function stringToUint8Array(str){
+      var array = [];
+      for (var i = 0; i < str.length; ++i) {
+        array.push(str.charCodeAt(i));
+      }
+      var retArray = new Uint8Array(array);
+      return retArray;
+    }
+
+    // This function clears the list of Access Points
+    function removeAllAccessPoints() {
+      var ssidList = document.getElementById("selAccessPoint");
+      while (ssidList.firstChild) {
+        ssidList.removeChild(ssidList.firstChild);
+      }
+      accessPointsObj = [];
+    }
+
+
+    // This function handles the click event of the button 'Connect'.
+    async function onConnectButtonClick() {
+      try {
+        if (!bluetoothDevice) {
+          await requestDevice();
+        }
+        await connectDeviceAndCacheCharacteristics();
+
+        log('> Enable WI-FI...');
+        var wifiInit = new Uint8Array(2);
+        wifiInit[0] = COMMISSIONING_CONTROL_WIFI_INIT;
+        wifiInit[1] = 0x00;
+        commissioningControlCharacteristic.writeValue(wifiInit);
+      } catch (error) {
+        log('> Error: ' + error);
+      }
+    }
+
+
+    // This function handles the click event of the button 'Reset Device'.
+    function onResetButtonClick() {
+      try {
+        if (!bluetoothDevice) {
+            return;
+        }
+        log('> Disconnecting from Bluetooth Device...');
+        if (bluetoothDevice.gatt.connected) {
+            bluetoothDevice.gatt.disconnect();
+        } else {
+            log('> Bluetooth Device is already disconnected');
+        }
+        // Disable/Enable the buttons
+        document.querySelector('#btnConnect').disabled = false;
+        document.querySelector('#btnScan').disabled = true;
+        document.querySelector('#btnReset').disabled = true;
+        document.querySelector('#btnSave').disabled = true;
+        document.querySelector('#btnJoin').disabled = true;
+        document.querySelector('#selAccessPoint').disabled = true;
+        document.querySelector('#txtPassword').disabled = true;
+
+        removeAllAccessPoints();
+
+        if (commissioningStateCharacteristic) {
+            commissioningStateCharacteristic.removeEventListener('characteristicvaluechanged', handleCommissioningStateChanged);
+            commissioningStateCharacteristic = null;
+        }
+        commissioningControlCharacteristic = null;
+        // Note that it doesn't disconnect device.
+        bluetoothDevice = null;
+        log('> Bluetooth Device reset');
+      } catch (error) {
+        log('> Error: ' + error);
+      }
+    }
+
+
+    // This function handles the click event of the button 'Start Scan'.
+    async function onScanButtonClick() {
+      try {
+        if (!bluetoothDevice) {
+          await requestDevice();
+        }
+        await connectDeviceAndCacheCharacteristics();
+
+        log('> Starting a Wi-Fi Scan ...');
+
+        document.querySelector('#btnScan').disabled = true;
+        document.querySelector('#btnSave').disabled = true;
+        document.querySelector('#btnJoin').disabled = true;
+        removeAllAccessPoints();
+        document.querySelector('#selAccessPoint').disabled = true;
+        document.querySelector('#txtPassword').disabled = true;
+
+        log('> Clear Wi-Fi AP list ...');
+        var ssidList = document.getElementById("selAccessPoint");
+        while (ssidList.firstChild) {
+          ssidList.removeChild(ssidList.firstChild);
+        }
+
+        log('> Enable WI-FI scanner ...');
+        var wifiInit = new Uint8Array(2);
+        wifiInit[0] = COMMISSIONING_CONTROL_WIFI_SCAN;
+        wifiInit[1] = 0x00;
+
+        await commissioningControlCharacteristic.writeValue(wifiInit);
+        var ssidList = document.getElementById("selAccessPoint");
+        while (ssidList.firstChild) {
+          ssidList.removeChild(ssidList.firstChild);
+        }
+      } catch (error) {
+        log('> Error: ' + error);
+      }
+    }
+
+
+    // This function handles the click event of the button 'Save Access Point'.
+    async function onSaveButtonClick() {
+      try {
+        if (!bluetoothDevice) {
+          await requestDevice();
+        }
+        await connectDeviceAndCacheCharacteristics();
+
+        log('> Saving Access Point ...');
+
+        document.querySelector('#btnScan').disabled = true;
+        document.querySelector('#btnSave').disabled = true;
+        document.querySelector('#btnJoin').disabled = true;
+        document.querySelector('#selAccessPoint').disabled = true;
+        document.querySelector('#txtPassword').disabled = true;
+
+        log('> Writing Wi-Fi Config ...');
+        var pwdObject = document.getElementById('txtPassword');
+        var ssidList = document.getElementById("selAccessPoint");
+        var pwd = pwdObject.value;
+        var ssid = ssidList.options[ssidList.selectedIndex].text;
+        var ssidTLV = new Uint8Array(ssid.length + pwd.length + 4 + 2);
+        ssidTLV[0] = COMMISSIONING_CONTROL_WIFI_SAVE_AP;
+        ssidTLV[1] = ssidTLV.length - 2;
+        ssidTLV[2] = CommissioningTlvTypeSSID;
+        ssidTLV[3] = ssid.length;
+        var ssidArray = stringToUint8Array(ssid);
+        for (i = 0;i < ssid.length;i++)
+        {
+            ssidTLV[i + 4] = ssidArray[i];
+        }
+        ssidTLV[ssid.length + 4] = CommissioningTlvTypePassword;
+        ssidTLV[ssid.length + 5] = pwd.length;
+        var pwdArray = stringToUint8Array(pwd);
+        for (i = 0;i < pwd.length;i++)
+        {
+            ssidTLV[i + ssid.length + 6] = pwdArray[i];
+        }
+        await commissioningControlCharacteristic.writeValue(ssidTLV);
+
+      } catch (error) {
+        log('> Error: ' + error);
+      }
+    }
+
+
+    // This function handles the click event of the button 'Join Access Point'.
+    async function onJoinButtonClick() {
+      try {
+        if (!bluetoothDevice) {
+          await requestDevice();
+        }
+        await connectDeviceAndCacheCharacteristics();
+
+        log('> Joining Access Point ...');
+
+        document.querySelector('#btnScan').disabled = true;
+        document.querySelector('#btnSave').disabled = true;
+        document.querySelector('#btnJoin').disabled = true;
+        document.querySelector('#selAccessPoint').disabled = true;
+        document.querySelector('#txtPassword').disabled = true;
+
+        log('> Writing Wi-Fi Config ...');
+        var wifiConfigState = new Uint8Array(2);
+        wifiConfigState[0] = COMMISSIONING_CONTROL_WIFI_SET_AP;
+        wifiConfigState[1] = 0x00;
+
+        await commissioningControlCharacteristic.writeValue(wifiConfigState);
+      } catch (error) {
+        log('> Error: ' + error);
+      }
+    }
+    </script>
+
+    <title>Wi-Fi Commissioning using Web BLE</title>
+
+    <script>
+      // Add a global error event listener early on in the page load, to help ensure that browsers
+      // which don't support specific functionality still end up displaying a meaningful message.
+      window.addEventListener('error', function(error) {
+        if (ChromeSamples && ChromeSamples.setStatus) {
+          console.error(error);
+          ChromeSamples.setStatus(error.message + ' (Your browser may not support this feature.)');
+          error.preventDefault();
+        }
+      });
+    </script>
+  </head>
+
+  <body>
+   <h3>Wi-Fi Commissioning using Web BLE</h3>
+
+   <script>
+        function addToCache(request, networkResponse) {
+          return caches.open('web-bluetooth')
+            .then(cache => cache.put(request, networkResponse));
+        }
+
+        function getCacheResponse(request) {
+          return caches.open('web-bluetooth').then(cache => {
+            return cache.match(request);
+          });
+        }
+
+        function getNetworkOrCacheResponse(request) {
+          return fetch(request).then(networkResponse => {
+            addToCache(request, networkResponse.clone());
+            return networkResponse;
+          }).catch(_ => {
+            return getCacheResponse(request)
+              .then(cacheResponse => cacheResponse || Response.error());
+          });
+        }
+
+        self.addEventListener('fetch', event => {
+          if (event.request.url.startsWith(self.location.origin)) {
+            event.respondWith(getNetworkOrCacheResponse(event.request));
+          }
+        });
+   </script>
+
+   <table align="center">
+     <tr>
+       <td>
+          <button id="btnConnect" class="buttons">Connect Bluetooth Device</button>
+       </td>
+     </tr>
+     <tr>
+        <td>
+          <button id="btnScan" class="buttons" disabled>Find Access Points</button>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <select id="selAccessPoint" class="buttons" disabled><option></option></select>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <input id="txtPassword" type="password" style="width:246px;text-align-last:center;" value="password" disabled/>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <button id="btnSave" class="buttons" disabled>Save Access Point</button>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <button id="btnJoin" class="buttons" disabled>Join Access Point</button>
+        </td>
+      </tr>
+      <tr>
+        <td>
+          <button id="btnReset" class="buttons" disabled>Reset Bluetooth Device</button>
+        </td>
+      </tr>
+   </table>
+
+  <script>
+    // Live Logger
+
+    var ChromeSamples = {
+      log: function() {
+        var line = Array.prototype.slice.call(arguments).map(function(argument) {
+          return typeof argument === 'string' ? argument : JSON.stringify(argument);
+        }).join(' ');
+
+        document.querySelector('#log').textContent += line + '\n';
+
+        document.querySelector('#output').scrollTop = document.querySelector('#output').scrollHeight;
+      },
+
+      clearLog: function() {
+        document.querySelector('#log').textContent = '';
+      },
+
+      setStatus: function(status) {
+        document.querySelector('#status').textContent = status;
+      },
+
+      setContent: function(newContent) {
+        var content = document.querySelector('#content');
+        while(content.hasChildNodes()) {
+          content.removeChild(content.lastChild);
+        }
+        content.appendChild(newContent);
+      }
+    };
+  </script>
+
+  <h3>Live Output</h3>
+  <div id="output" class="output"
+   style="height:220px; max-height: 220px; overflow-y: scroll; background-color:black; color:gray; font-family: 'Courier New', Courier, monospace; font-size: 8pt;">
+   <div id="content"></div>
+   <div id="status"></div>
+   <pre id="log"></pre>
+  </div>
+
+  <script>
+    if (/Chrome\/(\d+\.\d+.\d+.\d+)/.test(navigator.userAgent)){
+      // Let's log a warning if the sample is not
+      // supposed to execute on this version of Chrome.
+      if (55 > parseInt(RegExp.$1)) {
+        ChromeSamples.setStatus('Warning! Keep in mind this sample has been tested with Chrome ' + 55 + '.');
+      }
+    }
+  </script>
+
+  <script>
+    // Adding Button Click Event Listeners
+    // The event handlers are defined in web_ble.js
+
+    document.querySelector('#btnConnect').addEventListener('click', function() {
+      if (isWebBluetoothEnabled()) {
+        onConnectButtonClick();
+      }
+    });
+
+    document.querySelector('#btnScan').addEventListener('click', function() {
+      if (isWebBluetoothEnabled()) {
+        onScanButtonClick();
+      }
+    });
+
+    document.querySelector('#btnSave').addEventListener('click', function() {
+      if (isWebBluetoothEnabled()) {
+        onSaveButtonClick();
+      }
+    });
+
+    document.querySelector('#btnJoin').addEventListener('click', function() {
+      if (isWebBluetoothEnabled()) {
+        onJoinButtonClick();
+      }
+    });
+
+    document.querySelector('#btnReset').addEventListener('click', function(event) {
+      if (isWebBluetoothEnabled()) {
+        ChromeSamples.clearLog();
+        onResetButtonClick();
+      }
+    });
+
+  </script>
+
+  <script>
+    // Web Bluetooth API support verifier.
+
+    log = ChromeSamples.log;
+
+    function isWebBluetoothEnabled() {
+      if (navigator.bluetooth) {
+        return true;
+      } else {
+        ChromeSamples.setStatus('Web Bluetooth API is not available.\n' +
+            'Please make sure the "Experimental Web Platform" features flag is enabled:\n' +
+            'chrome://flags/#enable-experimental-web-platform-features');
+        return false;
+      }
+    }
+  </script>
+
+  <script>
+    /* jshint ignore:start */
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+        (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+      m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+    ga('create', 'UA-53563471-1', 'auto');
+    ga('send', 'pageview');
+    /* jshint ignore:end */
+  </script>
+ </body>
+</html>
