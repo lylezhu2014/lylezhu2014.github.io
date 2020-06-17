@@ -1,1 +1,2 @@
-# web_ble
+# web ble
+Demonsrate Web BLE functions
