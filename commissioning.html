@@ -108,9 +108,9 @@ Apache License, Version 2.0
     const CommissioningTlvTypeRssi = 3;
 
     // This function requests BLE devices nearby
-    // with the device prefix name 'DMP'.
+    // with the device prefix name 'ZBLE'.
     async function requestDevice() {
-      log('> Requesting Bluetooth Devices DMP*...');
+      log('> Requesting Bluetooth Devices ZBLE*...');
       bluetoothDevice = await navigator.bluetooth.requestDevice({
           filters: [{namePrefix: 'ZBLE'}],
           optionalServices: [SVC_COMMISSIONING_UUID]
@@ -260,6 +260,7 @@ Apache License, Version 2.0
             break;
             case CommissioningNotifyWifiSaveAPEnd:
                 savedEventHandler();
+                onJoinButtonClick();
                 document.querySelector('#btnConnect').disabled = true;
                 document.querySelector('#btnScan').disabled = false;
                 document.querySelector('#btnReset').disabled = false;
@@ -568,7 +569,7 @@ Apache License, Version 2.0
       </tr>
       <tr>
         <td>
-          <button id="btnSave" class="buttons" disabled>Save Access Point</button>
+          <button id="btnSave" class="buttons" disabled hidden>Save Access Point</button>
         </td>
       </tr>
       <tr>
@@ -657,7 +658,7 @@ Apache License, Version 2.0
 
     document.querySelector('#btnJoin').addEventListener('click', function() {
       if (isWebBluetoothEnabled()) {
-        onJoinButtonClick();
+        onSaveButtonClick();
       }
     });
 
