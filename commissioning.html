@@ -106,6 +106,8 @@ Apache License, Version 2.0
     const CommissioningTlvTypeSSID = 1;
     const CommissioningTlvTypePassword = 2;
     const CommissioningTlvTypeRssi = 3;
+    const CommissioningTlvTypeBSSID = 4;
+    const CommissioningTlvTypeSecurity = 5;
 
     // This function requests BLE devices nearby
     // with the device prefix name 'ZBLE'.
@@ -219,30 +221,60 @@ Apache License, Version 2.0
                 for (i = 0; i < length;)
                 {
                     var option = document.createElement("option");
-                    for (m = 0;m < 2; m++)
+                    
+                    if (CommissioningTlvTypeSSID == event.target.value.getUint8(3 + i))
                     {
-                        let type = event.target.value.getUint8(3 + i);
-                        i++;
-                        let len = event.target.value.getUint8(3 + i);
-                        i++;
-
-                        var value = new Uint8Array(len);
-                        for (j = 0;j < len;j++)
+                        var BSSID;
+                        var ssidFound = 0;
+                        var rssi = 100;
+                        for (m = 0;; m++)
                         {
-                            value[j] = event.target.value.getUint8(3 + i);
+                            if (i >= length)
+                            {
+                                break;
+                            }
+                            let type = event.target.value.getUint8(3 + i);
+                            if ((1 == ssidFound) && (CommissioningTlvTypeSSID == type))
+                            {
+                                break;
+                            }
+                            else
+                            {
+                                ssidFound = 1;
+                            }
                             i++;
+                            let len = event.target.value.getUint8(3 + i);
+                            i++;
+
+                            var value = new Uint8Array(len);
+                            for (j = 0;j < len;j++)
+                            {
+                                value[j] = event.target.value.getUint8(3 + i);
+                                i++;
+                            }
+                            if (CommissioningTlvTypeSSID == type)
+                            {
+                                option.text = arrayBufferToString(value);
+                            }
+                            if (CommissioningTlvTypeBSSID == type)
+                            {
+                                BSSID = value[0].toString(16) + ":" +
+                                        value[1].toString(16) + ":" +
+                                        value[2].toString(16) + ":" +
+                                        value[3].toString(16) + ":" +
+                                        value[4].toString(16) + ":" +
+                                        value[5].toString(16);
+                            }
+                            if (CommissioningTlvTypeRssi == type)
+                            {
+                                rssi = value[0];
+                            }
                         }
-                        if (1 == type)
-                        {
-                            option.text = arrayBufferToString(value);
-                        }
-                        if (3 == type)
-                        {
-                            option.value = value[0];
-                        }
+                        log('> scan list, ssid ' + option.text + ' rssi '+ rssi);
+                        option.value = option.text;
+                        option.text = option.text + "(" + BSSID + ", -" + rssi + "dBm)";
+                        ssidList.add(option);
                     }
-                    log('> scan list, ssid ' + option.text + ' rssi '+ option.value);
-                    ssidList.add(option);
                 }
                 if (CommissioningNotifyWifiScanEnd == notifyCode)
                 {
@@ -445,7 +477,7 @@ Apache License, Version 2.0
         var pwdObject = document.getElementById('txtPassword');
         var ssidList = document.getElementById("selAccessPoint");
         var pwd = pwdObject.value;
-        var ssid = ssidList.options[ssidList.selectedIndex].text;
+        var ssid = ssidList.options[ssidList.selectedIndex].value;
         var ssidTLV = new Uint8Array(ssid.length + pwd.length + 4 + 2);
         ssidTLV[0] = COMMISSIONING_CONTROL_WIFI_SAVE_AP;
         ssidTLV[1] = ssidTLV.length - 2;
